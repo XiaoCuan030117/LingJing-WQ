@@ -34,6 +34,8 @@ def test_read_write_overwrite_and_approval(tools, tmp_path):
         ("read_file", {}),
         ("read_file", {"path": ""}),
         ("run_shell", {"command": " "}),
+        ("ask_user", {"question": " "}),
+        ("ask_user", {"question": 123}),
         ("write_file", {"path": "x", "content": "x" * (FILE_LIMIT + 1)}),
     ],
 )
@@ -133,3 +135,9 @@ def test_native_program_exit_code_is_preserved(tools):
     result = execute(tools, "run_shell", True, command=command)
     assert not result["ok"]
     assert result["data"]["exit_code"] == 9
+
+
+def test_ask_user_requires_answer_not_approval(tools):
+    call = tools.prepare("ask_user", json.dumps({"question": "文件名是什么？"}))
+    assert not call.requires_approval
+    assert tools.execute(call)["error"]["type"] == "user_input_required"

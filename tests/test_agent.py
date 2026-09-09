@@ -155,3 +155,63 @@ def test_followup_cannot_replace_waiting_or_failed_task(tools):
     failed.advance()
     with pytest.raises(ValueError):
         failed.continue_task("retry")
+
+
+def test_ask_user_then_write_keeps_context_and_queue(tools, tmp_path):
+    (tmp_path / "notes.txt").write_text("context")
+    model = FakeModel(
+        response(
+            tool_call("question", "ask_user", question="保存到哪个文件？"),
+            tool_call("read", "read_file", path="notes.txt"),
+        ),
+        response(tool_call("write", "write_file", path="answer.txt", content="hello")),
+        response(content="已写入 answer.txt。"),
+    )
+    agent = Agent(model, tools)
+    agent.start("写入 hello，先问我文件名")
+    assert agent.advance() == "waiting_user"
+    token = agent.waiting.token
+    assert len(agent.pending) == 1
+    assert not agent.approve(token, True)
+    for answer in ("", "  ", None):
+        assert not agent.reply(token, answer)
+        assert agent.advance() == "waiting_user"
+    assert not agent.reply("stale-token", "wrong.txt")
+    assert agent.request_count == agent.tool_count == 1
+    assert not agent.results
+    with pytest.raises(ValueError):
+        agent.continue_task("replace")
+    assert agent.reply(token, "answer.txt")
+    assert not agent.reply(token, "duplicate.txt")
+    assert agent.advance() == "waiting_approval"
+    assert not (tmp_path / "answer.txt").exists()
+    assert [r["tool_call_id"] for r in agent.results] == ["question", "read"]
+    assert agent.results[0]["data"] == {"answer": "answer.txt"}
+    assert any(m.get("content") == "写入 hello，先问我文件名" for m in model.requests[1])
+    assert json.loads(model.requests[1][-2]["content"])["data"]["answer"] == "answer.txt"
+    assert not agent.reply(agent.waiting.token, "cannot-answer-approval")
+    assert agent.approve(agent.waiting.token, True)
+    assert agent.advance() == "completed"
+    assert (tmp_path / "answer.txt").read_text() == "hello"
+    assert not agent.reply(token, "late")
+
+
+def test_two_questions_pause_independently(tools):
+    model = FakeModel(
+        response(
+            tool_call("q1", "ask_user", question="文件名？"),
+            tool_call("q2", "ask_user", question="内容？"),
+        ),
+        response(content="已收到。"),
+    )
+    agent = Agent(model, tools)
+    agent.start("收集信息")
+    agent.advance()
+    first = agent.waiting.token
+    assert agent.reply(first, "a.txt")
+    assert agent.advance() == "waiting_user"
+    assert not agent.reply(first, "旧回答")
+    assert len(model.requests) == 1
+    assert agent.reply(agent.waiting.token, "hello")
+    assert agent.advance() == "completed"
+    assert [r["data"]["answer"] for r in agent.results] == ["a.txt", "hello"]

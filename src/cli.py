@@ -29,6 +29,16 @@ def run(agent: Agent, task: str, read_input=input, output=print) -> int:
             except EOFError:
                 allowed = False
             agent.approve(waiting.token, allowed)
+        elif state == "waiting_user":
+            waiting = agent.waiting
+            output("需要补充信息：" + json.loads(waiting.call.arguments)["question"])
+            try:
+                answer = read_input("你的回答：")
+            except EOFError:
+                output("输入已结束，任务停止；未将空回答发送给模型。")
+                return 1
+            if not agent.reply(waiting.token, answer):
+                output("请输入非空回答。")
         elif state == "completed":
             output(agent.answer)
             return 0

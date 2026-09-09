@@ -11,7 +11,7 @@ from src.tools import Tools
 
 
 def busy(agent):
-    return agent is not None and agent.state in {"running", "waiting_approval"}
+    return agent is not None and agent.state in {"running", "waiting_approval", "waiting_user"}
 
 
 def submit_task():
@@ -35,8 +35,30 @@ def submit_task():
 def queue_approval(token, allowed):
     # Callbacks only enqueue a decision. Execution happens once in the main run.
     agent = st.session_state.get("agent")
-    if agent and agent.waiting and token == agent.waiting.token:
+    if (
+        agent
+        and agent.state == "waiting_approval"
+        and agent.waiting
+        and token == agent.waiting.token
+    ):
         st.session_state.decision = (token, allowed)
+
+
+def queue_reply(token):
+    agent = st.session_state.get("agent")
+    if (
+        not agent
+        or agent.state != "waiting_user"
+        or not agent.waiting
+        or token != agent.waiting.token
+    ):
+        return
+    text = st.session_state.get(f"reply_{token}", "")
+    if not text.strip():
+        st.session_state.reply_error = "请输入非空回答。"
+        return
+    st.session_state.reply_event = (token, text)
+    st.session_state.reply_error = ""
 
 
 def reset_chat():
@@ -48,6 +70,8 @@ def reset_chat():
     st.session_state.agent = None
     st.session_state.startup_error = ""
     st.session_state.pop("decision", None)
+    st.session_state.pop("reply_event", None)
+    st.session_state.reply_error = ""
 
 
 def show_history(agent):
@@ -82,6 +106,9 @@ def main():
     if decision and agent:
         with st.spinner("正在处理本次决定…"):
             agent.approve(*decision)
+    reply_event = st.session_state.pop("reply_event", None)
+    if reply_event and agent:
+        agent.reply(*reply_event)
     if agent and agent.state == "running":
         with st.spinner("正在处理任务…"):
             agent.advance()
@@ -128,6 +155,20 @@ def main():
                 on_click=queue_approval,
                 args=(waiting.token, False),
             )
+        elif agent.state == "waiting_user":
+            waiting = agent.waiting
+            st.info("等待你补充信息；提交回答后继续原任务。")
+            st.text(json.loads(waiting.call.arguments)["question"])
+            with st.form(key=f"question_{waiting.token}"):
+                st.text_area("你的回答", key=f"reply_{waiting.token}")
+                st.form_submit_button(
+                    "提交回答",
+                    key=f"submit_{waiting.token}",
+                    on_click=queue_reply,
+                    args=(waiting.token,),
+                )
+            if st.session_state.get("reply_error"):
+                st.warning(st.session_state.reply_error)
         elif agent.state == "failed":
             st.error(agent.error)
             st.info("本轮已停止。点击“新建对话”后可以重新尝试。")

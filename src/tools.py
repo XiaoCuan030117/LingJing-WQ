@@ -46,6 +46,11 @@ def tool_schemas() -> list[dict]:
             "Run a noninteractive command in the configured shell. Requires user approval.",
             ["command"],
         ),
+        (
+            "ask_user",
+            "Ask one clear question for missing required information. Wait for the user's answer.",
+            ["question"],
+        ),
     ]
     return [
         {
@@ -97,6 +102,7 @@ class Tools:
             "read_file": {"path"},
             "write_file": {"path", "content"},
             "run_shell": {"command"},
+            "ask_user": {"question"},
         }
         if name not in expected:
             raise ToolError("unknown_tool", f"未知工具：{name}")
@@ -118,10 +124,12 @@ class Tools:
                 if len(args["content"].encode("utf-8")) > FILE_LIMIT:
                     raise ToolError("file_too_large", "写入内容超过 100 KiB。")
                 preview["overwrite"] = path.exists()
-        else:
+        elif name == "run_shell":
             if not args["command"].strip() or "\x00" in args["command"]:
                 raise ToolError("invalid_arguments", "命令不能为空或包含 NUL。")
             preview.update(workspace=str(self.workspace), shell=self.shell)
+        elif not args["question"].strip():
+            raise ToolError("invalid_arguments", "问题不能为空。")
         return PreparedCall(
             name, json.dumps(args), json.dumps(preview, ensure_ascii=False, indent=2)
         )
@@ -135,6 +143,8 @@ class Tools:
             if current != call:
                 raise ToolError("target_changed", "审批期间目标发生变化，请重新发起调用。")
             args = json.loads(call.arguments)
+            if call.name == "ask_user":
+                return failure("user_input_required", "需要等待用户回答，由 Agent 恢复此调用。")
             if call.name == "run_shell":
                 return self._run_shell(args["command"])
             path = self._path(args["path"])

@@ -1,6 +1,6 @@
 # 最小 Coding Agent（CLI + WebUI）
 
-使用 Python 普通函数和直接模型 SDK，实现自然语言任务 → 模型工具调用 → 实际执行 → 结果回传 → 最终回答。提供单轮 CLI 和 Streamlit 连续对话界面，支持读取 UTF-8 文件、写入文件和运行 Shell。写入和 Shell 均需逐次确认。当前完成 PLAN 的第二阶段，`ask_user` 尚未实现。
+使用 Python 普通函数和直接模型 SDK，实现自然语言任务 → 模型工具调用 → 实际执行 → 结果回传 → 最终回答。提供单轮 CLI 和 Streamlit 连续对话界面，支持读取 UTF-8 文件、写入文件和运行 Shell。写入和 Shell 均需逐次确认。当前完成 PLAN 的第三阶段：信息不足时可通过 `ask_user` 提问，收到回答后继续原任务。
 
 ## 安装与配置
 
@@ -49,7 +49,7 @@ Windows 默认固定使用 `powershell.exe -NoProfile -NonInteractive`；可通�
 - `src/cli.py`：任务入口、结果展示及授权输入。
 - `tests/`：模拟模型、SDK 模拟 HTTP、实际临时文件和无害 Shell 测试。
 
-状态为 `idle → running → waiting_approval → running → completed/failed`。`advance()` 在授权等待期间不会请求模型或重放调用；`approve(token, allowed)` 只消费当前令牌。`continue_task()` 仅在上一轮完成后开启下一轮，保留消息上下文并重置本轮调用计数；失败后需新建对话。
+状态为 `idle → running → waiting_approval/waiting_user → running → completed/failed`。`advance()` 在等待授权或回答期间不会请求模型或重放调用；`approve(token, allowed)` 和 `reply(token, text)` 分别消费当前审批或回答令牌。`continue_task()` 仅在上一轮完成后开启下一轮，保留消息上下文并重置本轮调用计数；失败后需新建对话。
 
 ## WebUI 启动与验收（第二阶段）
 
@@ -74,6 +74,14 @@ Windows 默认固定使用 `powershell.exe -NoProfile -NonInteractive`；可通�
 文件读写各限制 100 KiB，按解析后的路径限制在工作目录内；写入为完整覆盖并可创建父目录。读取错误、越界、参数错误和非零退出码会返回模型。每轮上限为 12 次模型请求、20 次工具调用；API 错误或达到上限后停止，不自动重试。
 
 Shell 超时 30 秒，输出合计最多保留 20 KiB，截断会标记；输出按 UTF-8 解码，非 UTF-8 字节用替代字符表示。超时终止直接 Shell 进程，但不保证终止全部子进程；不支持后台或交互式命令。Shell 仍拥有当前用户权限，可访问工作目录外资源，文件路径校验也不是抵抗并发文件替换的沙箱。请只在本机可信的临时工作目录演示。
+
+## ask_user 暂停与恢复（第三阶段）
+
+`ask_user` 接受一个非空字符串参数 `question`。调用后显示问题和回答表单，无须批准提问本身；用户提交非空回答后，以 `{"ok": true, "data": {"answer": "用户回答"}}` 回传原工具调用 ID，再继续队列或请求模型。回答不会被当成新的顶层任务。
+
+验证步骤：输入“创建一个打印 hello 的 Python 脚本，先问我保存的文件名”。页面应进入等待回答；填写 `hello.py` 并提交，随后核对写入审批中的路径和内容，批准后检查文件存在及最终回答。空回答会提示重填，等待期间 Rerun 不增加模型请求；重复或过期提交无效。同一响应含多个问题时逐个提问，每个问题使用独立表单。
+
+CLI 同样会显示问题并等待输入；空回答重新询问，EOF 结束任务并返回退出码 1，Ctrl+C 返回 130。不会以空回答代替用户意见。会话丢失后无法恢复，仍不提供持久化或后台等待服务。问题是否需要提出由模型判断，系统提示词要求缺少必要信息时使用该工具。
 
 ## 测试与检查
 

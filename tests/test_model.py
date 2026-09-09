@@ -25,7 +25,12 @@ def test_sdk_request_and_tool_response():
         body = json.loads(request.content)
         assert request.url.path == "/v1/chat/completions"
         assert body["model"] == "test-model"
-        assert len(body["tools"]) == 3
+        assert {tool["function"]["name"] for tool in body["tools"]} == {
+            "read_file",
+            "write_file",
+            "run_shell",
+            "ask_user",
+        }
         return httpx.Response(
             200,
             json={

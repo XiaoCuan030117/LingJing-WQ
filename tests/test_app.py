@@ -167,3 +167,69 @@ def test_sessions_do_not_share_history(launch):
     second = AppTest.from_file(str(APP), default_timeout=10).run()
     assert second.session_state.agent is None
     assert not second.chat_message
+
+
+def test_question_answer_approval_flow_and_reruns(launch, tmp_path):
+    app, model = launch(
+        response(tool_call("q", "ask_user", question="文件保存在哪里？")),
+        response(tool_call("w", "write_file", path="chosen.txt", content="hello")),
+        response(content="已写入 chosen.txt。"),
+    )
+    app.chat_input[0].set_value("写入 hello，先问我文件名").run()
+    assert not app.exception
+    agent = app.session_state.agent
+    token = agent.waiting.token
+    assert agent.state == "waiting_user"
+    assert app.chat_input[0].disabled
+    assert app.button(key="reset").disabled
+    assert app.text_input(key="workspace").disabled
+    assert not any((button.key or "").startswith("allow_") for button in app.button)
+    assert any(text.value == "文件保存在哪里？" for text in app.text)
+    app.text_area(key=f"reply_{token}").set_value("  ")
+    app.button(key=f"submit_{token}").click().run()
+    assert agent.state == "waiting_user"
+    assert any("非空" in warning.value for warning in app.warning)
+    app.run()
+    assert agent.waiting.token == token
+    assert len(model.requests) == 1
+    app.text_area(key=f"reply_{token}").set_value("chosen.txt")
+    app.button(key=f"submit_{token}").click().run()
+    assert not app.exception
+    assert agent.state == "waiting_approval"
+    assert agent.results[0]["data"]["answer"] == "chosen.txt"
+    assert not (tmp_path / "chosen.txt").exists()
+    app.session_state.reply_event = (token, "duplicate.txt")
+    app.run()
+    assert len(model.requests) == 2
+    assert len(agent.results) == 1
+    click(app, "allow_")
+    assert agent.state == "completed"
+    assert (tmp_path / "chosen.txt").read_text() == "hello"
+    app.run()
+    assert len(model.requests) == 3
+    assert len(agent.results) == 2
+
+
+def test_queued_questions_have_separate_forms(launch):
+    app, model = launch(
+        response(
+            tool_call("q1", "ask_user", question="文件名？"),
+            tool_call("q2", "ask_user", question="内容？"),
+        ),
+        response(content="已收到。"),
+    )
+    app.chat_input[0].set_value("收集信息").run()
+    agent = app.session_state.agent
+    first = agent.waiting.token
+    app.text_area(key=f"reply_{first}").set_value("a.txt")
+    app.button(key=f"submit_{first}").click().run()
+    assert not app.exception
+    second = agent.waiting.token
+    assert second != first
+    assert app.text_area(key=f"reply_{second}").value == ""
+    assert len(model.requests) == 1
+    app.text_area(key=f"reply_{second}").set_value("hello")
+    app.button(key=f"submit_{second}").click().run()
+    assert not app.exception
+    assert agent.state == "completed"
+    assert [result["data"]["answer"] for result in agent.results] == ["a.txt", "hello"]

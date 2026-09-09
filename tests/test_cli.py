@@ -47,3 +47,31 @@ def test_missing_config_exits_cleanly(monkeypatch, tmp_path, capsys):
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     assert main(["--workspace", str(tmp_path), "总结文件"]) == 1
     assert "OPENAI_API_KEY" in capsys.readouterr().err
+
+
+def test_cli_ask_user_reprompts_empty_answer(tools, tmp_path):
+    model = FakeModel(
+        response(tool_call("q", "ask_user", question="文件名？")),
+        response(tool_call("w", "write_file", path="chosen.txt", content="hello")),
+        response(content="完成。"),
+    )
+    inputs = iter(["  ", "chosen.txt", "y"])
+    output = []
+    agent = Agent(model, tools)
+    assert run(agent, "问我文件名后写入", lambda _: next(inputs), output.append) == 0
+    assert (tmp_path / "chosen.txt").read_text() == "hello"
+    assert agent.results[0]["data"]["answer"] == "chosen.txt"
+    assert any("非空" in line for line in output)
+    assert len(model.requests) == 3
+
+
+def test_cli_ask_user_eof_stops_without_fake_answer(tools):
+    def eof(_):
+        raise EOFError
+
+    model = FakeModel(response(tool_call("q", "ask_user", question="文件名？")))
+    agent = Agent(model, tools)
+    assert run(agent, "提问", eof, lambda _: None) == 1
+    assert len(model.requests) == 1
+    assert agent.state == "waiting_user"
+    assert not agent.results
