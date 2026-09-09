@@ -126,3 +126,32 @@ def test_empty_and_overlapping_tasks_rejected(tools):
     agent.start("task")
     with pytest.raises(ValueError):
         agent.start("replacement")
+
+
+def test_followup_resets_limits_and_preserves_history(tools):
+    model = FakeModel(response(content="first"), response(content="second"))
+    agent = Agent(model, tools, max_requests=1)
+    agent.start("one")
+    agent.advance()
+    old_run = agent.run_id
+    agent.continue_task("two")
+    assert agent.run_id != old_run
+    assert agent.request_count == agent.tool_count == 0
+    assert agent.advance() == "completed"
+    assert agent.request_count == 1
+    assert [m["content"] for m in model.requests[-1][1:]] == ["one", "first", "two"]
+
+
+def test_followup_cannot_replace_waiting_or_failed_task(tools):
+    agent = Agent(FakeModel(response(tool_call("w", "write_file", path="a", content="x"))), tools)
+    agent.start("write")
+    agent.advance()
+    with pytest.raises(ValueError):
+        agent.continue_task("replacement")
+    assert agent.state == "waiting_approval"
+    assert agent.waiting.call_id == "w"
+    failed = Agent(FakeModel(ModelError("failed")), tools)
+    failed.start("task")
+    failed.advance()
+    with pytest.raises(ValueError):
+        failed.continue_task("retry")

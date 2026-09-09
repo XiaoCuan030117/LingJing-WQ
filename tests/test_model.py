@@ -1,4 +1,5 @@
 import json
+import os
 
 import httpx
 import pytest
@@ -116,6 +117,63 @@ def test_environment_configuration(monkeypatch):
         assert model.client.timeout == 60
     finally:
         model.client.close()
+
+
+def test_dotenv_loads_quotes_comments_and_bom_without_changing_environment(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text(
+        'OPENAI_API_KEY="file-key${LITERAL}" # comment\n'
+        "OPENAI_MODEL='file-model'\n"
+        "OPENAI_BASE_URL=https://test.invalid/v1\n",
+        encoding="utf-8-sig",
+    )
+    elsewhere = tmp_path / "workspace"
+    elsewhere.mkdir()
+    (elsewhere / ".env").write_text("OPENAI_MODEL=wrong-workspace-model\n")
+    monkeypatch.chdir(elsewhere)
+    model = OpenAIModel.from_env()
+    try:
+        assert model.model == "file-model"
+        assert model.client.api_key == "file-key${LITERAL}"
+        assert str(model.client.base_url) == "https://test.invalid/v1/"
+        assert "OPENAI_API_KEY" not in os.environ
+    finally:
+        model.client.close()
+
+
+def test_environment_overrides_dotenv(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text(
+        "OPENAI_API_KEY=file-key\nOPENAI_MODEL=file-model\n"
+        "OPENAI_BASE_URL=https://file.invalid/v1\n"
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "environment-key")
+    monkeypatch.setenv("OPENAI_MODEL", "environment-model")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://environment.invalid/v1")
+    model = OpenAIModel.from_env()
+    try:
+        assert model.client.api_key == "environment-key"
+        assert model.model == "environment-model"
+        assert str(model.client.base_url) == "https://environment.invalid/v1/"
+    finally:
+        model.client.close()
+
+
+def test_dotenv_edits_apply_to_new_clients(tmp_path):
+    for name in ("first-model", "second-model"):
+        (tmp_path / ".env").write_text(f"OPENAI_API_KEY=test-key\nOPENAI_MODEL={name}\n")
+        model = OpenAIModel.from_env()
+        try:
+            assert model.model == name
+        finally:
+            model.client.close()
+
+
+@pytest.mark.parametrize(
+    "content", ["", "OPENAI_API_KEY\nOPENAI_MODEL=", "OPENAI_API_KEY=test-key"]
+)
+def test_incomplete_dotenv_reports_missing_configuration(tmp_path, content):
+    (tmp_path / ".env").write_text(content)
+    with pytest.raises(ModelError, match="OPENAI_API_KEY"):
+        OpenAIModel.from_env()
 
 
 def test_sdk_agent_file_summary_round_trip(tools, tmp_path):

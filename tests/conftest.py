@@ -5,6 +5,14 @@ import pytest
 from src.tools import Tools
 
 
+@pytest.fixture(autouse=True)
+def isolate_model_configuration(monkeypatch, tmp_path):
+    # Tests must never read the developer's credentials or call a paid service.
+    monkeypatch.setattr("src.model.ENV_FILE", tmp_path / ".env")
+    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def tool_call(call_id, name, **arguments):
     return {
         "id": call_id,

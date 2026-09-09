@@ -1,8 +1,12 @@
 """Small OpenAI-compatible Chat Completions adapter."""
 
 import os
+from pathlib import Path
 
+from dotenv import dotenv_values
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
+
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
 
 class ModelError(RuntimeError):
@@ -16,11 +20,20 @@ class OpenAIModel:
 
     @classmethod
     def from_env(cls):
-        key = os.environ.get("OPENAI_API_KEY", "").strip()
-        model = os.environ.get("OPENAI_MODEL", "").strip()
+        # Read the repository file, never a tool workspace's .env. Do not mutate
+        # os.environ: a new WebUI conversation must see edits made to the file.
+        try:
+            config = {
+                **dotenv_values(ENV_FILE, encoding="utf-8-sig", interpolate=False),
+                **os.environ,
+            }
+        except (OSError, UnicodeError) as exc:
+            raise ModelError("无法读取项目 .env；请检查文件权限和 UTF-8 编码。") from exc
+        key = (config.get("OPENAI_API_KEY") or "").strip()
+        model = (config.get("OPENAI_MODEL") or "").strip()
         if not key or not model:
-            raise ModelError("请配置 OPENAI_API_KEY 和 OPENAI_MODEL 环境变量。")
-        base_url = os.environ.get("OPENAI_BASE_URL", "").strip() or None
+            raise ModelError("请在项目 .env 或环境变量中配置 OPENAI_API_KEY 和 OPENAI_MODEL。")
+        base_url = (config.get("OPENAI_BASE_URL") or "").strip() or None
         return cls(OpenAI(api_key=key, base_url=base_url, timeout=60, max_retries=0), model)
 
     def complete(self, messages: list[dict], tools: list[dict]) -> dict:

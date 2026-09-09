@@ -55,6 +55,22 @@ class Agent:
         ]
         self.state = "running"
 
+    def continue_task(self, task: str):
+        """Start another turn only after completion, retaining the conversation."""
+        if self.state != "completed":
+            raise ValueError("仅已完成的对话可以继续；失败后请新建对话。")
+        if not task.strip():
+            raise ValueError("任务不能为空。")
+        self.run_id = uuid4().hex
+        self.request_count = 0
+        self.tool_count = 0
+        self.results = []
+        self.answer = ""
+        self.error = ""
+        self._seen_ids = set()
+        self.messages.append({"role": "user", "content": task})
+        self.state = "running"
+
     def _fail(self, message: str):
         self.error = message
         self.state = "failed"
